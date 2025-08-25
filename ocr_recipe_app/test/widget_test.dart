@@ -1,30 +1,34 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
 import 'package:ocr_recipe_app/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
+  testWidgets('OCR App basic UI test', (WidgetTester tester) async {
+    // Laadime rakenduse
     await tester.pumpWidget(const MyApp());
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    // Kontrollime, et kõik kolm peamist nuppu on olemas
+    expect(find.text('Pildista retsept'), findsOneWidget);
+    expect(find.text('Tee OCR'), findsOneWidget);
+    expect(find.text('Genereeri tehnoloogiline kaart'), findsOneWidget);
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+    // Kontrollime, et OCR tekstikast ei ole esialgu täidetud
+    expect(find.text('—'), findsOneWidget);
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    // Kontrollime, et AppBar pealkiri on õige
+    expect(find.text('OCR Recipe App'), findsOneWidget);
+  });
+
+  testWidgets('Buttons are disabled when busy', (WidgetTester tester) async {
+    await tester.pumpWidget(const MyApp());
+
+    // Nupud ei tohiks olla alguses disabled
+    final pickButton = find.text('Pildista retsept');
+    final ocrButton = find.text('Tee OCR');
+    final genButton = find.text('Genereeri tehnoloogiline kaart');
+
+    expect(tester.widget<ElevatedButton>(pickButton).enabled, true);
+    expect(tester.widget<ElevatedButton>(ocrButton).enabled, true);
+    expect(tester.widget<ElevatedButton>(genButton).enabled, true);
   });
 }

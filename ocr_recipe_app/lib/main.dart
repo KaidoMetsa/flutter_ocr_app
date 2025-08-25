@@ -1,4 +1,12 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:open_filex/open_filex.dart';
 
 void main() {
   runApp(const MyApp());
@@ -7,116 +15,179 @@ void main() {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      title: 'OCR Recipe App',
+      theme: ThemeData(useMaterial3: true),
+      home: const HomePage(),
+      debugShowCheckedModeBanner: false,
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<HomePage> createState() => _HomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _HomePageState extends State<HomePage> {
+  final ImagePicker _picker = ImagePicker();
+  XFile? _image;
+  String? _ocrText;
+  String? _ocrId;
+  String? _title;
+  bool _busy = false;
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+  // Kohanda vastavalt: Android emulaator → 10.0.2.2, iOS sim → localhost
+  static const String baseUrl = 'http://10.0.2.2:8000';
+
+  Future<void> _pickImage() async {
+    final img =
+        await _picker.pickImage(source: ImageSource.camera, imageQuality: 95);
+    if (img != null) {
+      setState(() {
+        _image = img;
+        _ocrText = null;
+        _ocrId = null;
+        _title = null;
+      });
+    }
+  }
+
+  Future<void> _runOcr() async {
+    if (_image == null) return;
+    setState(() => _busy = true);
+    try {
+      final uri = Uri.parse('$baseUrl/ocr');
+      final req = http.MultipartRequest('POST', uri)
+        ..files.add(await http.MultipartFile.fromPath('file', _image!.path));
+      final streamed = await req.send();
+      final resp = await http.Response.fromStream(streamed);
+      if (resp.statusCode == 200) {
+        final data = json.decode(resp.body) as Map<String, dynamic>;
+        setState(() {
+          _ocrText = data['text'] as String?;
+          _ocrId = data['id'] as String?;
+          _title = data['title'] as String?;
+        });
+      } else {
+        _showSnack('OCR ebaõnnestus: ${resp.statusCode}');
+      }
+    } catch (e) {
+      _showSnack('Viga: $e');
+    } finally {
+      setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _generateTechCard() async {
+    final id = _ocrId;
+    final text = _ocrText;
+    if (id == null && (text == null || text.isEmpty)) {
+      _showSnack('Pole OCR-i tulemust');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final uri = Uri.parse('$baseUrl/generate-tech-card');
+      final payload = id != null ? {'id': id} : {'text': text};
+      final resp = await http.post(uri,
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode(payload));
+      if (resp.statusCode == 200) {
+        final data = json.decode(resp.body) as Map<String, dynamic>;
+        final outId = data['id'] as String;
+        await _downloadTechCard(outId);
+      } else {
+        _showSnack('Kaardi genereerimine ebaõnnestus: ${resp.statusCode}');
+      }
+    } catch (e) {
+      _showSnack('Viga: $e');
+    } finally {
+      setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _downloadTechCard(String id) async {
+    final uri = Uri.parse('$baseUrl/download-tech-card/$id');
+    final resp = await http.get(uri);
+    if (resp.statusCode == 200) {
+      final bytes = resp.bodyBytes;
+      final dir = await getApplicationDocumentsDirectory();
+      final f = File('${dir.path}/tech_card_$id.xlsx');
+      await f.writeAsBytes(bytes);
+      _showSnack('Salvestatud: ${f.path}');
+      await OpenFilex.open(f.path);
+    } else {
+      _showSnack('Allalaadimine ebaõnnestus: ${resp.statusCode}');
+    }
+  }
+
+  void _showSnack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
+      appBar: AppBar(title: const Text('OCR Recipe App')),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ElevatedButton.icon(
+                onPressed: _busy ? null : _pickImage,
+                icon: const Icon(Icons.camera_alt),
+                label: const Text('Pildista retsept'),
+              ),
+              const SizedBox(height: 8),
+              ElevatedButton.icon(
+                onPressed: _busy ? null : _runOcr,
+                icon: const Icon(Icons.text_snippet),
+                label: const Text('Tee OCR'),
+              ),
+              const SizedBox(height: 8),
+              ElevatedButton.icon(
+                onPressed: _busy ? null : _generateTechCard,
+                icon: const Icon(Icons.table_view),
+                label: const Text('Genereeri tehnoloogiline kaart'),
+              ),
+              const SizedBox(height: 16),
+              if (_image != null)
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Pilt: ${_image!.name}'),
+                      const SizedBox(height: 8),
+                      if (_title != null) Text('Pealkiri: $_title'),
+                      const SizedBox(height: 8),
+                      const Text('OCR tekst:'),
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.black12),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: SingleChildScrollView(
+                            child: Text(_ocrText ?? '—'),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
     );
   }
 }
